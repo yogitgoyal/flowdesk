@@ -1,0 +1,165 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String             @id @default(uuid())
+  email         String             @unique
+  passwordHash  String
+  name          String
+  avatarColor   String // assigned presence color, e.g. "#E8A33D"
+  createdAt     DateTime           @default(now())
+  memberships   WorkspaceMember[]
+  assignedTasks Task[]             @relation("TaskAssignee")
+  invitesCreated WorkspaceInvite[] @relation("InviteCreator")
+}
+
+model Workspace {
+  id        String             @id @default(uuid())
+  name      String
+  ownerId   String
+  members   WorkspaceMember[]
+  projects  Project[]
+  invites   WorkspaceInvite[]
+  labels    Label[]
+  createdAt DateTime           @default(now())
+}
+
+model WorkspaceMember {
+  id          String    @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        Role      @default(MEMBER) // ADMIN or MEMBER
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@unique([workspaceId, userId])
+}
+
+model WorkspaceInvite {
+  id          String    @id @default(uuid())
+  workspaceId String
+  email       String
+  role        Role      @default(MEMBER)
+  token       String    @unique
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy   User      @relation("InviteCreator", fields: [invitedById], references: [id])
+
+  @@unique([workspaceId, email])
+  @@index([token])
+}
+
+model Project {
+  id          String    @id @default(uuid())
+  workspaceId String
+  name        String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  columns     Column[]
+  tasks       Task[]
+  createdAt   DateTime  @default(now())
+}
+
+model Column {
+  id        String  @id @default(uuid())
+  projectId String
+  name      String
+  position  Float
+  project   Project @relation(fields: [projectId], references: [id])
+  tasks     Task[]
+}
+
+model Task {
+  id          String        @id @default(uuid())
+  projectId   String
+  columnId    String
+  title       String
+  description   String?
+  dueDate       DateTime? 
+  dueDateLocked Boolean       @default(false)
+  assigneeId    String?
+  assignee    User?         @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  priority    Priority      @default(MEDIUM)
+  position    Float
+  version     Int           @default(1) // optimistic locking
+  completedAt DateTime?     // set when the task enters a column named "Done" (case-insensitive); cleared if moved back out
+  attachmentUrl String?     // Cloudinary secure_url of the uploaded attachment, if any
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  project     Project       @relation(fields: [projectId], references: [id])
+  column      Column        @relation(fields: [columnId], references: [id])
+  versions    TaskVersion[]
+  activities  Activity[]
+  labels      TaskLabel[]
+}
+
+model TaskVersion {
+  id        String   @id @default(uuid())
+  taskId    String
+  snapshot  Json // full task state at that version
+  editedBy  String
+  createdAt DateTime @default(now())
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model Activity {
+  id        String   @id @default(uuid())
+  taskId    String?
+  projectId String
+  userId    String
+  action    String // "task.created" | "task.moved" | "task.assigned" ...
+  metadata  Json?
+  createdAt DateTime @default(now())
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Label {
+  id          String      @id @default(uuid())
+  workspaceId String
+  name        String
+  color       String
+  createdAt   DateTime    @default(now())
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks       TaskLabel[]
+
+  @@unique([workspaceId, name])
+}
+
+model TaskLabel {
+  taskId  String
+  labelId String
+  task    Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  label   Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, labelId])
+}
