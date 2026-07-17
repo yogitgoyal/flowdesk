@@ -2,32 +2,48 @@
 
 import { useEffect, useState } from "react";
 import { useWorkspaceStore } from "@/lib/workspaceStore";
+import { useUserStore } from "@/lib/userStore";
+import { apiFetch } from "@/lib/api-client";
 
 type Role = "ADMIN" | "MEMBER";
 
-// Resolves the logged-in user's role in the currently selected workspace.
-// Used to gate nav items (hide, not just disable — see FINAL_BLUEPRINT.md §7)
-// and to trim page content (e.g. analytics scope) between ADMIN and MEMBER.
 export function useCurrentRole(): { role: Role | null; loading: boolean } {
   const selectedWorkspaceId = useWorkspaceStore((s) => s.selectedWorkspaceId);
-  const [role, setRole] = useState<Role | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cachedRole = useUserStore((s) =>
+    selectedWorkspaceId ? s.roleByWorkspace[selectedWorkspaceId] ?? null : null
+  );
+  const setRoleForWorkspace = useUserStore((s) => s.setRoleForWorkspace);
+
+  const [role, setRole] = useState<Role | null>(cachedRole);
+  const [loading, setLoading] = useState(!cachedRole);
 
   useEffect(() => {
     if (!selectedWorkspaceId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reset state when workspace selection is cleared
       setRole(null);
       setLoading(false);
       return;
+    }
+
+    // Captured as a new const so TypeScript keeps it narrowed to `string`
+    // inside loadRole()'s closure below -- selectedWorkspaceId itself stays
+    // typed as `string | null` there otherwise.
+    const workspaceId = selectedWorkspaceId;
+    const alreadyCached = cachedRole !== null;
+    if (alreadyCached) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seed from cache immediately to avoid a remount flash
+      setRole(cachedRole);
+      setLoading(false);
     }
 
     let cancelled = false;
 
     async function loadRole() {
       try {
-        setLoading(true);
+        if (!alreadyCached) setLoading(true);
         const [meRes, membersRes] = await Promise.all([
-          fetch("/api/auth/me"),
-          fetch(`/api/workspaces/${selectedWorkspaceId}/members`),
+          apiFetch("/api/auth/me"),
+          apiFetch(`/api/workspaces/${workspaceId}/members`),
         ]);
         if (!meRes.ok || !membersRes.ok) throw new Error("Failed to resolve role");
 
@@ -37,15 +53,13 @@ export function useCurrentRole(): { role: Role | null; loading: boolean } {
           (m) => m.id === me.id
         );
         const resolvedRole = mine?.role ?? null;
-        if (!cancelled) setRole(resolvedRole);
-        console.info("[useCurrentRole] resolved role", {
-          selectedWorkspaceId,
-          userId: me.id,
-          resolvedRole,
-        });
+        if (!cancelled) {
+          setRole(resolvedRole);
+          if (resolvedRole) setRoleForWorkspace(workspaceId, resolvedRole);
+        }
       } catch (err) {
         console.error("Failed to resolve current role:", err);
-        if (!cancelled) setRole(null);
+        if (!cancelled && !alreadyCached) setRole(null);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -55,6 +69,7 @@ export function useCurrentRole(): { role: Role | null; loading: boolean } {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cachedRole intentionally excluded, only selectedWorkspaceId should retrigger the fetch
   }, [selectedWorkspaceId]);
 
   return { role, loading };

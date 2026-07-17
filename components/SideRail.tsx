@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useCurrentRole } from "@/lib/useCurrentRole";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
+import { useUserStore } from "@/lib/userStore";
 const navItems = [
   {
     href: "/dashboard",
@@ -63,16 +64,26 @@ export default function SideRail() {
   const { role } = useCurrentRole();
   const isAdmin = role === "ADMIN";
   const [collapsed, setCollapsed] = useState(false);
-  const [currentUser, setCurrentUser] = useState<{ name: string; avatarColor: string } | null>(null);
+  const cachedUser = useUserStore((s) => s.currentUser);
+  const setCachedUser = useUserStore((s) => s.setCurrentUser);
+  const [currentUser, setCurrentUser] = useState<{ name: string; avatarColor: string } | null>(cachedUser);
 
   useEffect(() => {
+    if (cachedUser) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seed from cache immediately to avoid a remount flash
+      setCurrentUser(cachedUser);
+      return;
+    }
     let cancelled = false;
     async function loadUser() {
       try {
         const res = await apiFetch("/api/auth/me");
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled) setCurrentUser({ name: data.name, avatarColor: data.avatarColor });
+        if (!cancelled) {
+          setCurrentUser({ name: data.name, avatarColor: data.avatarColor });
+          setCachedUser({ id: data.id, name: data.name, avatarColor: data.avatarColor });
+        }
       } catch {
         // ignore
       }
@@ -81,6 +92,7 @@ export default function SideRail() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cachedUser intentionally excluded, this effect should only re-run based on mount, cache-hit is handled by the check above
   }, []);
 
   const activeRoute = pathname?.split("?")[0] ?? "";
